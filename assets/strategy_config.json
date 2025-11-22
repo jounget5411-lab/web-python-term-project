@@ -1,0 +1,28 @@
+{
+  "SMA Crossover": {
+    "fast_period": 5,
+    "slow_period": 20
+  },
+  "EMA Crossover": {
+    "fast_period": 12,
+    "slow_period": 26
+  },
+  "RSI Strategy": {
+    "period": 14,
+    "oversold": 30,
+    "overbought": 70
+  },
+  "MACD Strategy": {
+    "fast": 12,
+    "slow": 26,
+    "signal": 9
+  },
+  "Bollinger Bands": {
+    "period": 20,
+    "std_dev": 2.0
+  },
+  "Momentum Strategy": {
+    "period": 5,
+    "threshold": 0.05
+  }
+}

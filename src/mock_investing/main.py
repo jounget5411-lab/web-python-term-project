@@ -12,7 +12,9 @@ from .market_data import (
     select_stock, download_stock_data, dataframe_to_price_list,
     get_period_choice, print_stock_summary
 )
-from .strategies import get_strategy_menu, create_strategy
+from .strategies import get_strategy_menu, create_strategy, STRATEGY_NAMES
+from .strategy_config import StrategyConfigManager
+from .strategy_menu import strategy_settings_menu
 from .exec_engine import can_execute, execute_market
 from .storage import append_trade, read_trades
 from .visualization import (
@@ -41,8 +43,8 @@ def clear_previous_trades():
 def print_banner():
     """프로그램 배너를 출력한다."""
     print("\n" + "=" * 60)
-    print("  🎯 실전 모의투자 시스템 v2.4")
-    print("  최적 자동화 전략 찾기")
+    print("  🎯 실전 모의투자 시스템 v2.5")
+    print("  최적 자동화 전략 찾기 + 커스텀 규칙")
     print("  Real Stock Trading Simulator")
     print("=" * 60)
 
@@ -56,6 +58,7 @@ def print_main_menu():
     print("2. 📈 모의투자 시작 (백테스팅)")
     print("3. 🏆 수익률 랭킹 (역대 최고 전략)")
     print("4. 📉 차트만 보기")
+    print("5. ⚙️  자동화 규칙 설정 (파라미터 커스터마이징)")
     print("0. 🚪 종료")
     print("=" * 60)
 
@@ -94,10 +97,24 @@ def run_backtest():
     # 스포일러 방지: 요약 정보는 표시하지 않음
     # (차트만 보기 모드에서만 표시)
     
-    # 4. 전략 선택
+    # 4. 전략 선택 (커스텀 설정 적용)
     print(get_strategy_menu())
     strategy_choice = input("\n전략 선택: ").strip()
-    strategy = create_strategy(strategy_choice)
+    
+    # 커스텀 설정 로드
+    config_manager = StrategyConfigManager()
+    strategy_name = STRATEGY_NAMES.get(strategy_choice)
+    if strategy_name:
+        custom_config = config_manager.get_config(strategy_name)
+        # description 제외한 파라미터만 전달
+        params = {k: v for k, v in custom_config.items() if k != 'description'}
+        strategy = create_strategy(strategy_choice, params)
+        
+        # 커스텀 설정 표시
+        if params != {k: v for k, v in config_manager.configs[strategy_name].items() if k != 'description'}:
+            print(f"\n⚙️  커스텀 설정 적용됨!")
+    else:
+        strategy = create_strategy(strategy_choice)
     
     print(f"\n✅ 선택된 전략: {strategy.name}")
     print(f"   {strategy.description}")
@@ -154,7 +171,7 @@ def run_backtest():
         cooldown_sec = 0
         order_ratio = 0.3
     
-    # 6. 백테스팅 실행
+    # 6. 백테스팅 실행 (Next Open + Slippage)
     clear_previous_trades()
     
     portfolio = Portfolio(initial_cash)
@@ -164,6 +181,7 @@ def run_backtest():
     print(f"   데이터: {len(prices)}일")
     print(f"   전략: {strategy.name}")
     print(f"   쿨다운: {cooldown_sec}일")
+    print(f"   📌 현실성 개선: Next Open 체결 + 슬리피지 0.1%")
     trades: List[Trade] = []
     portfolio_values: List[float] = []
     
@@ -174,13 +192,55 @@ def run_backtest():
     blocked_by_cooldown = 0
     blocked_by_no_asset = 0
     blocked_by_no_cash = 0
+    pending_signal = None  # (action, signal_idx)
     
-    for idx, price in enumerate(prices):
-        portfolio.last_price = price
-        price_history = prices[:idx+1]
+    for idx in range(len(df)):
+        # 현재가 업데이트 (종가 기준)
+        close_price = df.iloc[idx]['Close']
+        portfolio.last_price = close_price
         portfolio_values.append(portfolio.equity())
         
-        # 전략 평가
+        # 1. 이전에 발생한 신호가 있으면 오늘 시가로 체결
+        if pending_signal is not None:
+            action, signal_idx = pending_signal
+            open_price = df.iloc[idx]['Open']
+            
+            # 슬리피지 적용 (매수 +0.1%, 매도 -0.1%)
+            slippage_rate = 0.001
+            if action == "BUY":
+                execution_price = open_price * (1 + slippage_rate)
+            else:  # SELL
+                execution_price = open_price * (1 - slippage_rate)
+            
+            # 주문 금액 계산
+            order_cash = portfolio.cash * order_ratio
+            
+            try:
+                trade = execute_market(
+                    portfolio,
+                    action,
+                    execution_price,
+                    idx,  # 체결 시점
+                    fee_rate,
+                    order_cash,
+                    rule_name=strategy.name
+                )
+                trades.append(trade)
+                append_trade(trade, str(TRADES_CSV))
+                trade_count += 1
+                
+                if trade_count == 1:
+                    print(f"  ✅ 첫 거래 체결! (신호: {signal_idx}일 → 체결: {idx}일)")
+                elif trade_count % 5 == 0:
+                    print(f"  거래 {trade_count}건 체결...")
+            
+            except Exception as e:
+                print(f"  ⚠️  거래 실패: {e}")
+            
+            pending_signal = None
+        
+        # 2. 오늘 종가 기준으로 전략 평가
+        price_history = prices[:idx+1]
         action = strategy.decide(price_history)
         
         if action == "KEEP":
@@ -191,6 +251,10 @@ def run_backtest():
             buy_signals += 1
         elif action == "SELL":
             sell_signals += 1
+        
+        # 마지막 날은 체결 불가 (다음날이 없음)
+        if idx >= len(df) - 1:
+            continue
         
         # 쿨다운 체크
         if not can_execute(idx, portfolio.last_trade_ts, cooldown_sec):
@@ -207,31 +271,8 @@ def run_backtest():
             blocked_by_no_cash += 1
             continue
         
-        # 주문 금액 계산
-        order_cash = portfolio.cash * order_ratio
-        
-        try:
-            trade = execute_market(
-                portfolio,
-                action,
-                price,
-                idx,
-                fee_rate,
-                order_cash,
-                rule_name=strategy.name
-            )
-            trades.append(trade)
-            append_trade(trade, str(TRADES_CSV))
-            trade_count += 1
-            
-            if trade_count == 1:
-                print(f"  ✅ 첫 거래 체결!")
-            elif trade_count % 5 == 0:
-                print(f"  거래 {trade_count}건 체결...")
-        
-        except Exception as e:
-            print(f"  ⚠️  거래 실패: {e}")
-            continue
+        # 신호 저장 (다음날 체결 예약)
+        pending_signal = (action, idx)
     
     # 7. 백테스팅 종료 - 보유 주식 강제 청산
     if portfolio.asset_qty > 0:
@@ -260,7 +301,14 @@ def run_backtest():
         portfolio.asset_qty = 0
         print(f"   ✅ 청산 완료! 수수료: {sell_fee:,.0f}원")
     
-    # 8. 결과 출력
+    # 8. Buy & Hold 벤치마크 계산
+    first_price = df.iloc[0]['Open']
+    last_price = df.iloc[-1]['Close']
+    benchmark_qty = initial_cash / first_price
+    benchmark_final = benchmark_qty * last_price
+    benchmark_profit_rate = ((benchmark_final - initial_cash) / initial_cash) * 100
+    
+    # 9. 결과 출력
     final_equity = portfolio.equity()
     profit_loss = final_equity - initial_cash
     profit_rate = (profit_loss / initial_cash) * 100
@@ -314,6 +362,31 @@ def run_backtest():
     else:
         print_trade_statistics(trades, initial_cash, final_equity)
         
+        # 벤치마크 비교 출력
+        print("\n" + "=" * 60)
+        print("📊 벤치마크 비교 (Buy & Hold)")
+        print("=" * 60)
+        print(f"단순 보유 전략: 처음에 사서 끝까지 보유")
+        print(f"  초기 투자: {initial_cash:,.0f}원")
+        print(f"  최종 자산: {benchmark_final:,.0f}원")
+        print(f"  수익률: {benchmark_profit_rate:+.2f}%")
+        print("-" * 60)
+        print(f"자동화 전략 ({strategy.name}):")
+        print(f"  초기 투자: {initial_cash:,.0f}원")
+        print(f"  최종 자산: {final_equity:,.0f}원")
+        print(f"  수익률: {profit_rate:+.2f}%")
+        print("-" * 60)
+        
+        outperformance = profit_rate - benchmark_profit_rate
+        if outperformance > 0:
+            print(f"✅ 전략 승리! 벤치마크 대비 +{outperformance:.2f}%p 더 좋음")
+        elif outperformance < 0:
+            print(f"❌ 전략 패배! 벤치마크 대비 {outperformance:.2f}%p 더 나쁨")
+            print(f"   💡 이 경우 그냥 사서 보유하는 게 더 나았습니다")
+        else:
+            print(f"🤝 동일한 성과")
+        print("=" * 60)
+        
         # 백테스팅 결과 저장
         history = BacktestHistory()
         period_map = {"1mo": "1개월", "3mo": "3개월", "6mo": "6개월", "1y": "1년"}
@@ -345,6 +418,11 @@ def run_backtest():
             "trades_count": len(trades),
             "total_fees": sum(t.fee for t in trades),
             "trades": trades_data,  # 거래 내역 저장
+            "benchmark": {  # 벤치마크 정보 추가
+                "profit_rate": benchmark_profit_rate,
+                "final_value": benchmark_final,
+                "outperformance": profit_rate - benchmark_profit_rate
+            },
             "settings": {  # 매매 설정 저장
                 "fee_rate": fee_rate,
                 "cooldown": cooldown_sec,
@@ -367,7 +445,7 @@ def run_backtest():
     viz_choice = input("\n선택: ").strip()
     
     if viz_choice == "1":
-        plot_backtest_results(df, trades, portfolio_values, strategy.name, ticker)
+        plot_backtest_results(df, trades, portfolio_values, strategy.name, ticker, initial_cash)
     elif viz_choice == "2":
         plot_candlestick_chart(df, ticker, trades)
 
@@ -437,6 +515,9 @@ def main() -> None:
         
         elif choice == "4":
             view_chart_only()
+        
+        elif choice == "5":
+            strategy_settings_menu()
         
         elif choice == "0":
             print("\n👋 프로그램을 종료합니다.")

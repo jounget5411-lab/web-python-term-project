@@ -54,3 +54,4 @@ def read_trades(path: str) -> list:
     
     return trades
 
+

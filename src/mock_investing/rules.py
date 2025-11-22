@@ -56,3 +56,4 @@ def decide_action(prices: List[float], fast: int, slow: int) -> str:
     else:
         return "KEEP"
 
+

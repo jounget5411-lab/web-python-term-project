@@ -60,3 +60,4 @@ class Trade:
         self.fee = fee
         self.rule_name = rule_name
 
+

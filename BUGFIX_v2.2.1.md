@@ -148,3 +148,4 @@ poetry run start
 - v2.2: 수수료 버그 수정
 - **v2.2.1: UnboundLocalError + 스포일러 수정** ⭐
 
+

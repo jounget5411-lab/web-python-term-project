@@ -66,3 +66,4 @@ def execute_market(
     
     return Trade(now_ts, side, price, qty, fee, rule_name)
 
+

@@ -236,3 +236,4 @@ def print_stock_summary(ticker: str, data: pd.DataFrame) -> None:
     print(f"데이터 수: {len(data)}일")
     print("=" * 60)
 
+

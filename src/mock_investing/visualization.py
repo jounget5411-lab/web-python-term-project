@@ -29,7 +29,8 @@ def plot_backtest_results(
     trades: List[Trade],
     portfolio_values: List[float],
     strategy_name: str,
-    ticker: str
+    ticker: str,
+    initial_cash: float = None
 ) -> None:
     """
     백테스팅 결과를 그래프로 표시한다.
@@ -40,6 +41,7 @@ def plot_backtest_results(
         portfolio_values: 포트폴리오 가치 시계열
         strategy_name: 전략 이름
         ticker: 종목 티커
+        initial_cash: 초기 자금 (벤치마크 계산용, 선택)
     """
     setup_korean_font()
     
@@ -81,13 +83,22 @@ def plot_backtest_results(
     # 하단: 포트폴리오 가치 변화
     if portfolio_values:
         ax2.plot(df.index[:len(portfolio_values)], portfolio_values, 
-                label='Portfolio Value', color='purple', linewidth=2)
+                label='Strategy Portfolio', color='purple', linewidth=2.5, zorder=3)
         ax2.axhline(y=portfolio_values[0], color='gray', linestyle='--', 
                    label='Initial Value', alpha=0.5)
         
+        # Buy & Hold 벤치마크 선 추가
+        if initial_cash is not None:
+            first_price = df.iloc[0]['Open']
+            benchmark_qty = initial_cash / first_price
+            benchmark_values = [benchmark_qty * price for price in df['Close'][:len(portfolio_values)]]
+            ax2.plot(df.index[:len(portfolio_values)], benchmark_values, 
+                    label='Buy & Hold (Benchmark)', color='lightcoral', 
+                    linewidth=2, linestyle='--', alpha=0.8, zorder=2)
+        
         ax2.set_xlabel('Date')
         ax2.set_ylabel('Portfolio Value')
-        ax2.set_title('Portfolio Value Over Time')
+        ax2.set_title('Portfolio Value Over Time (vs Benchmark)')
         ax2.legend()
         ax2.grid(True, alpha=0.3)
         

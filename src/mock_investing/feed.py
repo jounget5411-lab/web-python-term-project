@@ -24,3 +24,4 @@ def replay_from_csv(path: str) -> Iterator[Dict[str, str]]:
             # ts, price 컬럼이 있다고 가정
             yield {"ts": int(row["ts"]), "price": float(row["price"])}
 
+

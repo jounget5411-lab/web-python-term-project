@@ -207,6 +207,22 @@ def print_result_detail(result: Dict) -> None:
     print(f"   손익:        {result.get('profit_loss', 0):+,.0f}원")
     print(f"   수익률:      {result.get('profit_rate', 0):+.2f}%")
     
+    # 벤치마크 비교
+    benchmark = result.get('benchmark', {})
+    if benchmark:
+        print(f"\n📊 벤치마크 비교 (Buy & Hold):")
+        benchmark_rate = benchmark.get('profit_rate', 0)
+        outperformance = benchmark.get('outperformance', 0)
+        print(f"   단순 보유 수익률:  {benchmark_rate:+.2f}%")
+        print(f"   전략 수익률:       {result.get('profit_rate', 0):+.2f}%")
+        print(f"   초과 수익:         {outperformance:+.2f}%p")
+        if outperformance > 0:
+            print(f"   ✅ 전략 승리! (벤치마크 대비 {outperformance:.2f}%p 더 좋음)")
+        elif outperformance < 0:
+            print(f"   ❌ 전략 패배 (그냥 보유가 {abs(outperformance):.2f}%p 더 나음)")
+        else:
+            print(f"   🤝 동일한 성과")
+    
     print(f"\n📈 거래 통계:")
     print(f"   거래 횟수:   {result.get('trades_count', 0)}회")
     print(f"   총 수수료:   {result.get('total_fees', 0):,.2f}원")
@@ -280,10 +296,8 @@ def show_ranking_menu(history: BacktestHistory) -> None:
                     
                     # 그래프 표시 옵션
                     if result.get('trades'):
-                        show_graph = input("\n📊 그래프를 표시하시겠습니까? (y/n): ").strip().lower()
-                        if show_graph == 'y':
-                            # 그래프 표시 함수 호출
-                            show_result_chart(result)
+                        print("\n" + "=" * 80)
+                        show_result_chart(result)
                     
                     input("\nEnter를 눌러 계속...")
                 else:
@@ -295,14 +309,15 @@ def show_ranking_menu(history: BacktestHistory) -> None:
 def show_result_chart(result: Dict) -> None:
     """
     백테스팅 결과의 차트를 표시한다.
+    캔들스틱 차트 + 자산 변화 그래프 (벤치마크 포함)
     
     Args:
         result: 결과 딕셔너리
     """
     try:
         from .market_data import download_stock_data
-        from .visualization import plot_candlestick_chart
-        from .models import Trade
+        from .visualization import plot_candlestick_chart, plot_backtest_results
+        from .models import Trade, Portfolio
         
         ticker = result.get('ticker')
         period_map = {"1개월": "1mo", "3개월": "3mo", "6개월": "6mo", "1년": "1y"}
@@ -328,8 +343,48 @@ def show_result_chart(result: Dict) -> None:
             )
             trades.append(trade)
         
-        # 차트 표시
-        plot_candlestick_chart(df, ticker, trades)
+        # 포트폴리오 가치 재계산
+        initial_cash = result.get('initial_cash', 0)
+        portfolio = Portfolio(initial_cash)
+        portfolio_values = []
+        
+        # 거래 내역을 시간 순으로 정렬
+        trades_sorted = sorted(trades, key=lambda t: t.ts)
+        trade_idx = 0
+        
+        for idx in range(len(df)):
+            price = df.iloc[idx]['Close']
+            portfolio.last_price = price
+            
+            # 이 시점에 체결된 거래가 있으면 반영
+            while trade_idx < len(trades_sorted) and trades_sorted[trade_idx].ts == idx:
+                trade = trades_sorted[trade_idx]
+                if trade.side == "BUY":
+                    portfolio.cash -= (trade.price * trade.qty + trade.fee)
+                    portfolio.asset_qty += trade.qty
+                else:  # SELL
+                    portfolio.cash += (trade.price * trade.qty - trade.fee)
+                    portfolio.asset_qty -= trade.qty
+                trade_idx += 1
+            
+            portfolio_values.append(portfolio.equity())
+        
+        # 차트 선택
+        print("\n📊 차트 선택:")
+        print("1. 캔들스틱 차트 (매매 포인트)")
+        print("2. 자산 변화 그래프 (벤치마크 비교)")
+        print("3. 둘 다 보기")
+        
+        chart_choice = input("\n선택 (기본 3): ").strip()
+        if not chart_choice:
+            chart_choice = "3"
+        
+        if chart_choice in ["1", "3"]:
+            plot_candlestick_chart(df, ticker, trades)
+        
+        if chart_choice in ["2", "3"]:
+            strategy_name = result.get('strategy', 'Strategy')
+            plot_backtest_results(df, trades, portfolio_values, strategy_name, ticker, initial_cash)
         
     except Exception as e:
         print(f"❌ 차트 표시 중 오류: {e}")
